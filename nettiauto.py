@@ -1,52 +1,55 @@
-# TODO: ERROR HANDLING
-import requests
-from BeautifulSoup import BeautifulSoup
-import gspread
-import datetime
-import time
-from random import randrange
-import json
+#!/usr/bin/env python
+
+import scraper
+import spreadsheet
+import smtplib
 import sys
+import config
 
-today = datetime.date.today()
+def scrape_data():
+    '''Scrape nettiauto.com for the car IDs that are
+    stored in Google spreadsheet and return scraped
+    data
+    '''
 
-# Load configuration file    
-config = json.loads(open('config.json').read())
+    gspreadsheet = spreadsheet.Spreadsheet()
+    nscraper = scraper.Scraper()
 
-# Login with your Google account
-gc = gspread.login(config['username'], config['password'])
+    car_ids = gspreadsheet.get_car_ids() 
+    return nscraper.get_data(car_ids)
 
-# Open a worksheet from spreadsheet
-wks = gc.open(config['spreadsheet']).sheet1
+def update_worksheet():
+    data = scrape_data()
+    gspreadsheet = spreadsheet.Spreadsheet()
+    gspreadsheet.update(data)
 
-# Get cars URLs from spreadsheet
-cars = wks.row_values(1)[1:]
+def mail_price_changes():
+    gss = spreadsheet.Spreadsheet()
+    gspreadsheet = gss.open()
+    last_row = len(gspreadsheet.col_values(1))
+    second_last_row = last_row - 1
+    last_row_values = gspreadsheet.row_values(last_row)[1:]
+    second_last_row_values = gspreadsheet.row_values(second_last_row)[1:]
 
-# Get next empty row and insert current date
-urow = len(wks.col_values(1)) + 1
-wks.update_cell(urow, 1, str(today))
+    for i, new_price in enumerate(last_row_values):
+        car_name = gspreadsheet.cell(2, i + 2).value
+        car_link = gspreadsheet.cell(5, i + 2).value
+        old_price = second_last_row_values[i]
+        if new_price < old_price:
+            fromaddr = config.email
+            toaddrs  = config.email
+            subject = "Subject: Nettiauto - %s price dropped: %s --> %s\n\n" % (car_name, old_price, new_price)
+            msg = "Car link: %s" % car_link
+            
+            username = config.connection['username']
+            password = config.connection['password']
+            server = smtplib.SMTP('smtp.gmail.com:587')
+            server.ehlo()
+            server.starttls()
+            server.login(username,password)
+            server.sendmail(fromaddr, toaddrs, subject + msg)
+            server.quit()
 
-# Insert price for each car
-for i, car in enumerate(cars):
-    time.sleep(randrange(2, 5))
-    r = requests.get(car)
-    soup = BeautifulSoup(r.content)
-
-    make = car.split('/')[-3].title()
-    model = car.split('/')[-2].title()
-    year = soup.find('div', id="id_adInfo").table.findAll('tr')[0].findAll('td')[1].text[:4]
-    mileage = soup.find('div', id="id_adInfo").table.find(text="Mittarilukema").parent.findNext('td').text
-    price = soup.find('span', itemprop="price").text
-    price = filter(lambda x: x.isdigit(), price)
-
-    # Insert car name, year and mileage if empty
-    # This is for newly added cars
-    if wks.cell(2, i + 2).value == '':
-        wks.update_cell(2, i + 2, make + " " + model)
-    if wks.cell(3, i + 2).value == '':
-        wks.update_cell(3, i + 2, year)
-    if wks.cell(4, i + 2).value == '':
-        wks.update_cell(4, i + 2,  mileage)
-
-    wks.update_cell(urow, i + 2, price)
-
+if __name__ == "__main__":
+    update_worksheet()
+    mail_price_changes()
